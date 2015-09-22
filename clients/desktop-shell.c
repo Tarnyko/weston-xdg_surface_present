@@ -911,6 +911,32 @@ unlock_dialog_finish(struct task *task, uint32_t events)
 }
 
 static void
+managed_surface_presented(void *data,
+			  struct managed_surface *managed_surface)
+{
+}
+
+static void
+managed_surface_title_changed(void *data,
+			      struct managed_surface *managed_surface,
+			      const char *title)
+{
+}
+
+static void
+managed_surface_removed(void *data,
+			struct managed_surface *managed_surface)
+{
+	managed_surface_destroy(managed_surface);
+}
+
+static const struct managed_surface_listener managed_surface_listener = {
+	managed_surface_presented,
+	managed_surface_title_changed,
+	managed_surface_removed
+};
+
+static void
 desktop_shell_configure(void *data,
 			struct desktop_shell *desktop_shell,
 			uint32_t edges,
@@ -987,10 +1013,19 @@ desktop_shell_grab_cursor(void *data,
 	}
 }
 
+static void
+desktop_shell_add_managed_surface(void *data,
+				  struct desktop_shell *desktop_shell,
+				  struct managed_surface *managed_surface,
+				  const char *title)
+{
+}
+
 static const struct desktop_shell_listener listener = {
 	desktop_shell_configure,
 	desktop_shell_prepare_lock_surface,
-	desktop_shell_grab_cursor
+	desktop_shell_grab_cursor,
+	desktop_shell_add_managed_surface
 };
 
 static void

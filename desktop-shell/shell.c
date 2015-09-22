@@ -3598,6 +3598,24 @@ static const struct wl_shell_surface_interface shell_surface_implementation = {
 };
 
 static void
+managed_surface_activate(struct wl_client *client,
+			 struct wl_resource *resource)
+{
+}
+
+static void
+managed_surface_destroy(struct wl_client *client,
+			struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static const struct managed_surface_interface managed_surface_implementation = {
+	managed_surface_activate,
+	managed_surface_destroy
+};
+
+static void
 destroy_shell_surface(struct shell_surface *shsurf)
 {
 	struct shell_surface *child, *next;

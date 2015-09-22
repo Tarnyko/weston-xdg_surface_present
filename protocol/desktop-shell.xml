@@ -117,6 +117,60 @@
       </description>
     </request>
 
+    <!-- Version 4 additions -->
+
+    <event name="add_managed_surface" since="4">
+      <description summary="manage a new surface">
+        Tell the shell to create a new managed_surface object.
+      </description>
+      <arg name="id" type="new_id" interface="managed_surface"/>
+      <arg name="title" type="string" allow-null="true"/>
+    </event>
+
+  </interface>
+
+  <interface name="managed_surface" version="1">
+    <description summary="interface for handling shell surfaces">
+      A managed surface is an abstraction for a shell surface,
+      susceptible to send events requiring shell feedback, and
+      also to which the shell might want to send requests back.
+    </description>
+
+    <request name="activate">
+      <description summary="activate a managed surface">
+        Tell the server that the shell wants to activate a
+        managed surface.
+      </description>
+    </request>
+
+    <request name="destroy" type="destructor"/>
+
+    <event name="presented">
+      <description summary="a managed surface needs attention">
+        This event will be sent immediately after a "present"
+        request has been issued on the corresponding shell surface.
+
+        The shell will draw a tooltip specifying the title of the
+        surface. If the user clicks on this tooltip, the shell will
+        send an "activate" request back to the server.
+      </description>
+    </event>
+
+    <event name="title_changed">
+      <description summary="a managed surface has a new title">
+        This event will be sent immediately after the title of the
+        corresponding shell surface has been modified.
+      </description>
+      <arg name="title" type="string" allow-null="true"/>
+    </event>
+
+    <event name="removed">
+      <description summary="a managed surface has been removed">
+        This event will be sent immediately after the corresponding
+        shell surface has been destroyed by the server.
+      </description>
+    </event>
+
   </interface>
 
   <interface name="screensaver" version="1">
