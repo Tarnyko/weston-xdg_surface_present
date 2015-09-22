@@ -4029,6 +4029,19 @@ xdg_surface_set_minimized(struct wl_client *client,
 	set_minimized(shsurf->surface);
 }
 
+static void
+xdg_surface_present(struct wl_client *client,
+                    struct wl_resource *resource)
+{
+}
+
+static void
+xdg_surface_present_from_event(struct wl_client *client,
+                               struct wl_resource *resource,
+                               uint32_t serial)
+{
+}
+
 static const struct xdg_surface_interface xdg_surface_implementation = {
 	xdg_surface_destroy,
 	xdg_surface_set_parent,
@@ -4044,6 +4057,8 @@ static const struct xdg_surface_interface xdg_surface_implementation = {
 	xdg_surface_set_fullscreen,
 	xdg_surface_unset_fullscreen,
 	xdg_surface_set_minimized,
+	xdg_surface_present,
+	xdg_surface_present_from_event,
 };
 
 static void

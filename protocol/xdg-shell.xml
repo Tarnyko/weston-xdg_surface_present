@@ -517,6 +517,26 @@
       </description>
     </request>
 
+    <request name="present">
+      <description summary="the window wants attention from the user">
+       The surface has new content and would like the compositor
+       to notify the user.
+      </description>
+    </request>
+
+    <request name="present_from_event">
+      <description summary="the window wants attention from the user">
+       The surface has new content and would like the compositor
+       to notify the user.
+
+       If a valid and sufficiently recent serial coming from an
+       input event (keyboard, pointer, touch) is passed as an
+       argument, the compositor may want to raise the surface.
+       Otherwise, the request just behaves like the "present" one.
+      </description>
+      <arg name="serial" type="uint" summary="serial of an input event"/>
+    </request>
+
     <event name="close">
       <description summary="surface wants to be closed">
         The close event is sent by the compositor when the user
