@@ -58,6 +58,7 @@ struct desktop {
 	struct unlock_dialog *unlock_dialog;
 	struct task unlock_task;
 	struct wl_list outputs;
+	struct wl_list desktop_surfaces;
 
 	struct window *grab_window;
 	struct widget *grab_widget;
@@ -68,6 +69,12 @@ struct desktop {
 	enum cursor_type grab_cursor;
 
 	int painted;
+};
+
+struct desktop_surface {
+	struct managed_surface *managed_surface;
+	char *title;
+	struct wl_list link;
 };
 
 struct surface {
@@ -921,12 +928,25 @@ managed_surface_title_changed(void *data,
 			      struct managed_surface *managed_surface,
 			      const char *title)
 {
+	struct desktop_surface *desktop_surface = data;
+
+	if (desktop_surface->title)
+		free(desktop_surface->title);
+
+	desktop_surface->title = (title) ? xstrdup(title) : NULL;
 }
 
 static void
 managed_surface_removed(void *data,
 			struct managed_surface *managed_surface)
 {
+	struct desktop_surface *desktop_surface = data;
+
+	if (desktop_surface->title)
+		free(desktop_surface->title);
+	wl_list_remove(&desktop_surface->link);
+	free(desktop_surface);
+
 	managed_surface_destroy(managed_surface);
 }
 
@@ -1019,6 +1039,19 @@ desktop_shell_add_managed_surface(void *data,
 				  struct managed_surface *managed_surface,
 				  const char *title)
 {
+	struct desktop *desktop = data;
+	struct desktop_surface *desktop_surface;
+
+	desktop_surface = xzalloc(sizeof *desktop_surface);
+	desktop_surface->managed_surface = managed_surface;
+	desktop_surface->title = (title) ? xstrdup(title) : NULL;
+
+	wl_list_insert(desktop->desktop_surfaces.prev,
+		       &desktop_surface->link);
+
+	managed_surface_add_listener(managed_surface,
+				     &managed_surface_listener,
+				     desktop_surface);
 }
 
 static const struct desktop_shell_listener listener = {
@@ -1336,6 +1369,7 @@ int main(int argc, char *argv[])
 
 	desktop.unlock_task.run = unlock_dialog_finish;
 	wl_list_init(&desktop.outputs);
+	wl_list_init(&desktop.desktop_surfaces);
 
 	config_file = weston_config_get_name_from_env();
 	desktop.config = weston_config_parse(config_file);
