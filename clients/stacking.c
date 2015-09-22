@@ -35,9 +35,15 @@
 #include "shared/helpers.h"
 #include "window.h"
 
+struct stacked_window {
+	struct window *window;
+	struct stacked_window *child_window;
+	struct stacking *stacking;
+};
+
 struct stacking {
 	struct display *display;
-	struct window *root_window;
+	struct stacked_window *root_window;
 };
 
 static void
@@ -57,17 +63,33 @@ static void
 fullscreen_handler(struct window *window, void *data);
 static void
 redraw_handler(struct widget *widget, void *data);
+static void
+close_handler(void *data);
 
 /* Iff parent_window is set, the new window will be transient. */
 static struct window *
 new_window(struct stacking *stacking, struct window *parent_window)
 {
+	struct stacked_window *last_window;
 	struct window *new_window;
 	struct widget *new_widget;
 
 	new_window = window_create(stacking->display);
 	window_set_parent(new_window, parent_window);
 
+	/* iterate through stackings until we find the last window */
+	last_window = stacking->root_window;
+	while (last_window->child_window) {
+		last_window = last_window->child_window;
+	}
+	/* create a new child window */
+	last_window->child_window = xzalloc(sizeof *last_window);
+	last_window = last_window->child_window;
+	last_window->child_window = NULL;
+	last_window->stacking = stacking;
+	/* make it contain the new widget */
+	last_window->window = new_window;
+	
 	new_widget = window_frame_create(new_window, new_window);
 
 	window_set_title(new_window, "Stacking Test");
@@ -76,7 +98,8 @@ new_window(struct stacking *stacking, struct window *parent_window)
 	window_set_fullscreen_handler(new_window, fullscreen_handler);
 	widget_set_button_handler(new_widget, button_handler);
 	widget_set_redraw_handler(new_widget, redraw_handler);
-	window_set_user_data(new_window, stacking);
+	window_set_close_handler(new_window, close_handler);
+	window_set_user_data(new_window, last_window);
 
 	window_schedule_resize(new_window, 300, 300);
 
@@ -110,12 +133,12 @@ button_handler(struct widget *widget,
                uint32_t button,
                enum wl_pointer_button_state state, void *data)
 {
-	struct stacking *stacking = data;
+	struct stacked_window *current_window = data;
 
 	switch (button) {
 	case BTN_RIGHT:
 		if (state == WL_POINTER_BUTTON_STATE_PRESSED)
-			show_popup(stacking, input, time,
+			show_popup(current_window->stacking, input, time,
 			           widget_get_user_data(widget));
 		break;
 
@@ -131,7 +154,7 @@ key_handler(struct window *window,
             uint32_t key, uint32_t sym, enum wl_keyboard_key_state state,
             void *data)
 {
-	struct stacking *stacking = data;
+	struct stacked_window *current_window = data;
 
 	if (state != WL_KEYBOARD_KEY_STATE_PRESSED)
 		return;
@@ -146,12 +169,17 @@ key_handler(struct window *window,
 		break;
 
 	case XKB_KEY_n:
-		/* New top-level window. */
-		new_window(stacking, NULL);
+		/* If this window has no child, create a new top-level one.
+		 * Otherwise, "present" the existing child window to the
+		 * user via a tooltip. */
+		if (current_window->child_window == NULL)
+			new_window(current_window->stacking, NULL);
+		else
+			window_present(current_window->child_window->window);
 		break;
 
 	case XKB_KEY_p:
-		show_popup(stacking, input, time, window);
+		show_popup(current_window->stacking, input, time, window);
 		break;
 
 	case XKB_KEY_q:
@@ -160,7 +188,7 @@ key_handler(struct window *window,
 
 	case XKB_KEY_t:
 		/* New transient window. */
-		new_window(stacking, window);
+		new_window(current_window->stacking, window);
 		break;
 
 	default:
@@ -283,12 +311,44 @@ redraw_handler(struct widget *widget, void *data)
 	cairo_destroy(cr);
 }
 
+static void
+close_handler(void *data)
+{
+	struct stacked_window *current_window = data;
+	struct stacked_window *parent_window;
+
+	/* find the parent window, iterate from the root */
+	parent_window = current_window->stacking->root_window;
+	while (parent_window) {
+		if (parent_window->child_window == current_window) {
+			parent_window->child_window = NULL;
+			break;
+		}
+		parent_window = parent_window->child_window;
+	}
+
+	/* unreference and free all children */
+	while (current_window) {
+		window_destroy(current_window->window);
+		free(current_window);
+
+		parent_window = current_window;
+		current_window = current_window->child_window;
+
+		parent_window->child_window = NULL;
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct stacking stacking;
 
 	memset(&stacking, 0, sizeof stacking);
+
+	stacking.root_window = xzalloc(sizeof stacking.root_window);
+	stacking.root_window->stacking = &stacking;
+	stacking.root_window->child_window = NULL;
 
 #ifdef HAVE_PANGO
 	g_type_init();
@@ -302,11 +362,11 @@ main(int argc, char *argv[])
 
 	display_set_user_data(stacking.display, &stacking);
 
-	stacking.root_window = new_window(&stacking, NULL);
+	stacking.root_window->window = new_window(&stacking, NULL);
 
 	display_run(stacking.display);
 
-	window_destroy(stacking.root_window);
+	window_destroy(stacking.root_window->window);
 	display_destroy(stacking.display);
 
 	return 0;
