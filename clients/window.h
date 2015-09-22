@@ -390,6 +390,9 @@ void
 window_set_minimized(struct window *window);
 
 void
+window_present(struct window *window);
+
+void
 window_set_user_data(struct window *window, void *data);
 
 void *

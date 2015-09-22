@@ -4401,6 +4401,15 @@ window_set_minimized(struct window *window)
 }
 
 void
+window_present(struct window *window)
+{
+	if (!window->xdg_surface)
+		return;
+
+	xdg_surface_present(window->xdg_surface);
+}
+
+void
 window_set_user_data(struct window *window, void *data)
 {
 	window->user_data = data;
