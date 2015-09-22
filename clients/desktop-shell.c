@@ -74,6 +74,7 @@ struct desktop {
 struct desktop_surface {
 	struct managed_surface *managed_surface;
 	char *title;
+	struct desktop *desktop;
 	struct wl_list link;
 };
 
@@ -89,6 +90,7 @@ struct panel {
 	struct window *window;
 	struct widget *widget;
 	struct wl_list launcher_list;
+	struct wl_list notifier_list;
 	struct panel_clock *clock;
 	int painted;
 	uint32_t color;
@@ -125,6 +127,13 @@ struct panel_launcher {
 	struct wl_array argv;
 };
 
+struct panel_notifier {
+	struct widget *widget;
+	struct panel *panel;
+	struct desktop_surface *desktop_surface;
+	struct wl_list link;
+};
+
 struct panel_clock {
 	struct widget *widget;
 	struct panel *panel;
@@ -152,6 +161,16 @@ sigchild_handler(int s)
 
 	while (pid = waitpid(-1, &status, WNOHANG), pid > 0)
 		fprintf(stderr, "child %d exited\n", pid);
+}
+
+static void
+update_window(struct window *window)
+{
+	struct rectangle allocation;
+
+	window_get_allocation(window, &allocation);
+	window_schedule_resize(window, allocation.width,
+	                               allocation.height);
 }
 
 static int
@@ -184,6 +203,25 @@ check_desktop_ready(struct window *window)
 		if (desktop->interface_version >= 2)
 			desktop_shell_desktop_ready(desktop->shell);
 	}
+}
+
+static struct panel_notifier *
+managed_surface_get_notifier(struct output *output,
+			     struct desktop_surface *desktop_surface)
+{
+	struct panel *panel;
+	struct panel_notifier *notifier;
+
+	panel = output->panel;
+	if (!panel)
+		return NULL;
+
+	wl_list_for_each(notifier, &panel->notifier_list, link) {
+		if (notifier->desktop_surface == desktop_surface)
+			return notifier;
+	}
+
+	return NULL;
 }
 
 static void
@@ -340,6 +378,112 @@ panel_launcher_touch_up_handler(struct widget *widget, struct input *input,
 }
 
 static void
+panel_destroy_notifier(struct panel_notifier *notifier)
+{
+	wl_list_remove(&notifier->link);
+	update_window(notifier->panel->window);
+
+	widget_destroy(notifier->widget);
+	notifier->desktop_surface = NULL;
+	free(notifier);
+}
+
+static void
+panel_notifier_activate(struct panel_notifier *notifier)
+{
+	if (notifier->desktop_surface)
+		managed_surface_activate(notifier->desktop_surface->managed_surface);
+
+	panel_destroy_notifier(notifier);
+}
+
+static void
+panel_notifier_touch_up_handler(struct widget *widget, struct input *input,
+			        uint32_t serial, uint32_t time, int32_t id,
+			        void *data)
+{
+	struct panel_notifier *notifier;
+
+	notifier = widget_get_user_data(widget);
+	widget_schedule_redraw(widget);
+	panel_notifier_activate(notifier);
+}
+
+static void
+panel_notifier_button_handler(struct widget *widget, struct input *input,
+			      uint32_t time, uint32_t button,
+			      enum wl_pointer_button_state state,
+			      void *data)
+{
+	struct panel_notifier *notifier;
+
+	notifier = widget_get_user_data(widget);
+	widget_schedule_redraw(widget);
+	if (state == WL_POINTER_BUTTON_STATE_RELEASED)
+		panel_notifier_activate(notifier);
+}
+
+static void
+panel_notifier_redraw_handler(struct widget *widget, void *data)
+{
+	struct panel_notifier *notifier = data;
+	struct rectangle allocation;
+	char *title;
+	cairo_text_extents_t extents;
+	cairo_t *cr;
+
+	widget_get_allocation(widget, &allocation);
+	if (allocation.width == 0 || !notifier->desktop_surface)
+		return;
+
+	cr = widget_cairo_create(notifier->panel->widget);
+
+	rounded_rect(cr, allocation.x, allocation.y,
+	                 allocation.x + allocation.width + 3,
+	                 allocation.y + allocation.height + 3, 3);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_set_source_rgba(cr, 0.8, 0.0, 0.0, 0.8);
+	cairo_fill(cr);
+
+	cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+	title = (notifier->desktop_surface->title) ?
+	        notifier->desktop_surface->title : "<Default>";
+	cairo_text_extents(cr, title, &extents);
+	cairo_move_to(cr,
+	              allocation.x + (allocation.width - extents.width) / 2,
+	              allocation.y + allocation.height);
+	cairo_show_text(cr, title);
+
+	cairo_destroy(cr);
+}
+
+static struct panel_notifier *
+panel_add_notifier(struct panel *panel,
+		   struct desktop_surface *desktop_surface)
+{
+	struct panel_notifier *notifier;
+
+	notifier = xzalloc(sizeof *notifier);
+	notifier->panel = panel;
+	notifier->desktop_surface = desktop_surface;
+
+	wl_list_insert(panel->notifier_list.prev, &notifier->link);
+
+	notifier->widget = widget_add_widget(panel->widget, notifier);
+	widget_set_touch_up_handler(notifier->widget,
+	                            panel_notifier_touch_up_handler);
+	widget_set_button_handler(notifier->widget,
+	                          panel_notifier_button_handler);
+	widget_set_redraw_handler(notifier->widget,
+	                          panel_notifier_redraw_handler);
+
+	widget_schedule_redraw(notifier->widget);
+	update_window(panel->window);
+
+	return notifier;
+}
+
+static void
 clock_func(struct task *task, uint32_t events)
 {
 	struct panel_clock *clock =
@@ -447,8 +591,12 @@ panel_resize_handler(struct widget *widget,
 		     int32_t width, int32_t height, void *data)
 {
 	struct panel_launcher *launcher;
+	struct panel_notifier *notifier;
 	struct panel *panel = data;
+	cairo_t *cr;
+	cairo_text_extents_t extents;
 	int x, y, w, h;
+	int last_launcher_x;
 
 	x = 10;
 	y = 16;
@@ -459,6 +607,26 @@ panel_resize_handler(struct widget *widget,
 				      x, y - h / 2, w + 1, h + 1);
 		x += w + 10;
 	}
+
+	last_launcher_x = x;
+	x = width - 180;
+	wl_list_for_each(notifier, &panel->notifier_list, link) {
+		widget_set_allocation(notifier->widget, 0, 0, 0, 0);
+		if (!notifier->desktop_surface)
+			continue;
+		cr = widget_cairo_create(notifier->widget);
+		cairo_text_extents(cr, (notifier->desktop_surface->title) ?
+		                   notifier->desktop_surface->title : "<Default>",
+                                   &extents);
+		x -= extents.width + 10;
+		if (x > last_launcher_x)
+			widget_set_allocation(notifier->widget,
+			                      x, y - extents.height / 2,
+			                      extents.width + 1,
+			                      extents.height + 1);
+		cairo_destroy(cr);
+	}
+
 	h=20;
 	w=170;
 
@@ -498,13 +666,16 @@ panel_destroy_launcher(struct panel_launcher *launcher)
 static void
 panel_destroy(struct panel *panel)
 {
-	struct panel_launcher *tmp;
-	struct panel_launcher *launcher;
+	struct panel_launcher *launcher, *l_tmp;
+	struct panel_notifier *notifier, *n_tmp;
 
 	panel_destroy_clock(panel->clock);
 
-	wl_list_for_each_safe(launcher, tmp, &panel->launcher_list, link)
+	wl_list_for_each_safe(launcher, l_tmp, &panel->launcher_list, link)
 		panel_destroy_launcher(launcher);
+
+	wl_list_for_each_safe(notifier, n_tmp, &panel->notifier_list, link)
+		panel_destroy_notifier(notifier);
 
 	widget_destroy(panel->widget);
 	window_destroy(panel->window);
@@ -524,6 +695,7 @@ panel_create(struct desktop *desktop)
 	panel->window = window_create_custom(desktop->display);
 	panel->widget = window_add_widget(panel->window, panel);
 	wl_list_init(&panel->launcher_list);
+	wl_list_init(&panel->notifier_list);
 
 	window_set_title(panel->window, "panel");
 	window_set_user_data(panel->window, panel);
@@ -921,6 +1093,18 @@ static void
 managed_surface_presented(void *data,
 			  struct managed_surface *managed_surface)
 {
+	struct desktop_surface *desktop_surface = data;
+	struct desktop *desktop = desktop_surface->desktop;
+	struct output *output;
+	struct panel_notifier *notifier;
+
+	wl_list_for_each(output, &desktop->outputs, link) {
+		notifier = managed_surface_get_notifier(output, desktop_surface);
+
+		if (!notifier && output->panel)
+			notifier = panel_add_notifier(output->panel,
+			                              desktop_surface);
+	}
 }
 
 static void
@@ -941,13 +1125,26 @@ managed_surface_removed(void *data,
 			struct managed_surface *managed_surface)
 {
 	struct desktop_surface *desktop_surface = data;
+	struct desktop *desktop = desktop_surface->desktop;
+	struct output *output;
+	struct panel_notifier *notifier;
+
+	wl_list_for_each(output, &desktop->outputs, link) {
+		notifier = managed_surface_get_notifier(output, desktop_surface);
+
+		if (notifier)
+			panel_destroy_notifier(notifier);	
+	}
+
+	managed_surface_destroy(desktop_surface->managed_surface);
 
 	if (desktop_surface->title)
 		free(desktop_surface->title);
+	desktop_surface->title = NULL;
+	desktop_surface->desktop = NULL;
 	wl_list_remove(&desktop_surface->link);
-	free(desktop_surface);
 
-	managed_surface_destroy(managed_surface);
+	free(desktop_surface);
 }
 
 static const struct managed_surface_listener managed_surface_listener = {
@@ -1045,6 +1242,7 @@ desktop_shell_add_managed_surface(void *data,
 	desktop_surface = xzalloc(sizeof *desktop_surface);
 	desktop_surface->managed_surface = managed_surface;
 	desktop_surface->title = (title) ? xstrdup(title) : NULL;
+	desktop_surface->desktop = desktop;
 
 	wl_list_insert(desktop->desktop_surfaces.prev,
 		       &desktop_surface->link);
